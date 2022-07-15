@@ -4,9 +4,14 @@
 //
 
 use crate::image;
-use crate::policy;
+use crate::policy::ref_match::PolicyReqMatchType;
+use crate::SignScheme;
 use anyhow::*;
+use serde::*;
+use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
 
 mod sigstore;
 mod verify;
@@ -16,76 +21,158 @@ pub use sigstore::SIGSTORE_CONFIG_DIR;
 pub use sigstore::{format_sigstore_name, get_sigs_from_specific_sigstore};
 pub use verify::verify_sig_and_extract_payload;
 
-#[derive(EnumString, Display, Debug, PartialEq)]
+/// Dir of config file
+pub const CONFIG_DIR: &str = "/run/image-security/simple_signing";
+
+pub const SIG_STORE_CONFIG_DIR: &str = "/run/image-security/simple_signing/sigstore_config";
+
+/// Path to the gpg pubkey ring of the signature
+pub const GPG_KEY_RING: &str = "/run/image-security/simple_signing/pubkey.gpg";
+
+/// The name of resource to request sigstore config from kbs
+pub const SIGSTORE_CONFIG_KBS: &str = "Sigstore Config";
+
+/// The name of gpg key ring to request sigstore config from kbs
+pub const GPG_KEY_RING_KBS: &str = "GPG Keyring";
+
+#[derive(Deserialize, Debug, PartialEq, Serialize)]
+pub struct SimpleParameters {
+    // KeyType specifies what kind of the public key to verify the signatures.
+    #[serde(rename = "keyType")]
+    pub key_type: String,
+
+    // KeyPath is a pathname to a local file containing the trusted key(s).
+    // Exactly one of KeyPath and KeyData can be specified.
+    //
+    // This field is optional.
+    #[serde(rename = "keyPath")]
+    pub key_path: Option<String>,
+    // KeyData contains the trusted key(s), base64-encoded.
+    // Exactly one of KeyPath and KeyData can be specified.
+    //
+    // This field is optional.
+    #[serde(rename = "keyData")]
+    pub key_data: Option<String>,
+
+    // SignedIdentity specifies what image identity the signature must be claiming about the image.
+    // Defaults to "match-exact" if not specified.
+    //
+    // This field is optional.
+    #[serde(default, rename = "signedIdentity")]
+    pub signed_identity: Option<PolicyReqMatchType>,
+}
+
+impl SignScheme for SimpleParameters {
+    fn prepare_runtime_dirs(&self) -> Result<()> {
+        if !Path::new(CONFIG_DIR).exists() {
+            fs::create_dir_all(CONFIG_DIR)
+                .map_err(|e| anyhow!("Create Simple Signing config dir failed: {:?}", e))?;
+        }
+
+        if !Path::new(SIG_STORE_CONFIG_DIR).exists() {
+            fs::create_dir_all(SIG_STORE_CONFIG_DIR).map_err(|e| {
+                anyhow!("Create Simple Signing sigstore-config dir failed: {:?}", e)
+            })?;
+        }
+        Ok(())
+    }
+
+    fn resources_check(&self) -> Result<Vec<&str>> {
+        let mut needed_resources = Vec::new();
+
+        // config kbs
+        let need_config = PathBuf::from(SIG_STORE_CONFIG_DIR)
+            .read_dir()
+            .map(|mut i| i.next().is_none())
+            .unwrap_or(false);
+        if need_config {
+            needed_resources.push(SIGSTORE_CONFIG_KBS);
+        }
+
+        // gpg key ring
+        if !Path::new(GPG_KEY_RING).exists() {
+            needed_resources.push(GPG_KEY_RING_KBS);
+        }
+
+        Ok(needed_resources)
+    }
+
+    fn process_gathered_resources(&self, resources: HashMap<&str, Vec<u8>>) -> Result<()> {
+        // Sigstore Config
+        if let Some(sigstore_config) = resources.get(SIGSTORE_CONFIG_KBS) {
+            let sigstore_config = String::from_utf8(sigstore_config.to_vec())?;
+            let sigstore_config_default_file = format!("{}/default.yaml", SIG_STORE_CONFIG_DIR);
+            fs::write(sigstore_config_default_file, sigstore_config)?;
+        }
+        
+        // GPG Keyring
+        if let Some(gpg_key_ring) = resources.get(GPG_KEY_RING_KBS) {
+            fs::write(GPG_KEY_RING, gpg_key_ring)?;
+        }
+
+        Ok(())
+    }
+
+    fn allows_image(&self, image: &mut crate::Image) -> Result<()> {
+        // FIXME: only support "GPGKeys" type now.
+        //
+        // refer to https://github.com/confidential-containers/image-rs/issues/14
+        if self.key_type != KeyType::Gpg.to_string() {
+            return Err(anyhow!(
+                "Unknown key type in policy config: only support {} now.",
+                KeyType::Gpg.to_string()
+            ));
+        }
+
+        let pubkey_ring = match (&self.key_path, &self.key_data) {
+            (None, None) => return Err(anyhow!("Neither keyPath or keyData specified.")),
+            (Some(_), Some(_)) => return Err(anyhow!("Both keyPath and keyData specified.")),
+            (None, Some(key_data)) => base64::decode(key_data)?,
+            (Some(key_path), None) => fs::read(key_path).map_err(|e| {
+                anyhow!("Read SignedBy keyPath failed: {:?}, path: {}", e, key_path)
+            })?,
+        };
+
+        let sigs = get_signatures(image)?;
+        let mut reject_reasons: Vec<anyhow::Error> = Vec::new();
+
+        for sig in sigs.iter() {
+            match judge_single_signature(
+                image,
+                self.signed_identity.as_ref(),
+                pubkey_ring.clone(),
+                sig.to_vec(),
+            ) {
+                // One accepted signature is enough.
+                Result::Ok(()) => {
+                    return Ok(());
+                }
+                Result::Err(e) => {
+                    reject_reasons.push(e);
+                }
+            }
+        }
+
+        if reject_reasons.is_empty() {
+            reject_reasons.push(anyhow!("Can not find any signatures."));
+        }
+
+        Err(anyhow!(format!(
+            "The signatures do not satisfied! Reject reason: {:?}",
+            reject_reasons
+        )))
+    }
+}
+
+#[derive(Deserialize, EnumString, Display, Debug, PartialEq, Clone)]
 pub enum KeyType {
     #[strum(to_string = "GPGKeys")]
     Gpg,
 }
 
-#[allow(unused_assignments)]
-pub fn judge_signatures_accept(
-    signedby_req: &policy::PolicyReqSignedBy,
-    image: &mut image::Image,
-) -> Result<()> {
-    // FIXME: only support "GPGKeys" type now.
-    //
-    // refer to https://github.com/confidential-containers/image-rs/issues/14
-    if signedby_req.key_type != KeyType::Gpg.to_string() {
-        return Err(anyhow!(
-            "Unknown key type in policy config: only support {} now.",
-            KeyType::Gpg.to_string()
-        ));
-    }
-
-    if !signedby_req.key_path.is_empty() && !signedby_req.key_data.is_empty() {
-        return Err(anyhow!("Both keyPath and keyData specified."));
-    }
-
-    let pubkey_ring = if !signedby_req.key_data.is_empty() {
-        base64::decode(&signedby_req.key_data)?
-    } else {
-        fs::read(&signedby_req.key_path).map_err(|e| {
-            anyhow!(
-                "Read SignedBy keyPath failed: {:?}, path: {}",
-                e,
-                &signedby_req.key_path
-            )
-        })?
-    };
-
-    let sigs = image.signatures(&signedby_req.scheme)?;
-    let mut reject_reasons: Vec<anyhow::Error> = Vec::new();
-
-    for sig in sigs.iter() {
-        match judge_single_signature(
-            image,
-            signedby_req.signed_identity.as_ref(),
-            pubkey_ring.clone(),
-            sig.to_vec(),
-        ) {
-            // One accepted signature is enough.
-            Result::Ok(()) => {
-                return Ok(());
-            }
-            Result::Err(e) => {
-                reject_reasons.push(e);
-            }
-        }
-    }
-
-    if reject_reasons.is_empty() {
-        reject_reasons.push(anyhow!("Can not find any signatures."));
-    }
-
-    Err(anyhow!(format!(
-        "The signatures do not satisfied! Reject reason: {:?}",
-        reject_reasons
-    )))
-}
-
 pub fn judge_single_signature(
     image: &image::Image,
-    signed_identity: Option<&Box<dyn policy::PolicyReferenceMatcher>>,
+    signed_identity: Option<&PolicyReqMatchType>,
     pubkey_ring: Vec<u8>,
     sig: Vec<u8>,
 ) -> Result<()> {
@@ -102,7 +189,6 @@ pub fn judge_single_signature(
     Ok(())
 }
 
-#[allow(unused_assignments)]
 pub fn get_signatures(image: &mut image::Image) -> Result<Vec<Vec<u8>>> {
     // Get image digest (manifest digest)
     let image_digest = if !image.manifest_digest.is_empty() {
