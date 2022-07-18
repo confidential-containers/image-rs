@@ -75,24 +75,24 @@ And then the field can be deserialized from `policy.json`.
 Besides, Implement the trait `SignScheme` for `NewSignSchemeParameters`.
 ```rust
 pub trait SignScheme {
-   /// Prepare runtime directories for storing signatures, configuretions ,.etc
-    fn prepare_runtime_dirs(&self) -> Result<()>;
+    /// Prepare runtime directories for storing signatures, configuretions ,.etc
+    async fn prepare_runtime_dirs(&self) -> Result<()>;
 
     /// Check whether the some resources need to be obtained from KBS.
     /// Any needed resources names are in the `Vec`, and these names are
     /// ResourceDescription in GetResourceRequest of gRPC between AA and kbs.
     /// Please refer to https://github.com/confidential-containers/image-rs/blob/main/docs/ccv1_image_security_design.md#get-resource-service
-    fn resources_check(&self) -> Result<Vec<&str>>;
+    async fn resources_check(&self) -> Result<Vec<&str>>;
 
     /// Process all the gathered resources from kbs. All the resources
     /// gathered from kbs due to the return value of `needed_resources_list_from_kbs()`
     /// will be recorded into a HashMap, mapping `resource name` ->
     /// `content of Vec<u8>`. The parameter of this function is the
     /// HashMap.
-    fn process_gathered_resources(&self, resources: HashMap<&str, Vec<u8>>) -> Result<()>;
+    async fn process_gathered_resources(&self, resources: HashMap<&str, Vec<u8>>) -> Result<()>;
 
     /// Judge whether an image is allowed by this SignScheme.
-    fn allows_image(&self, image: &mut Image) -> Result<()>;
+    async fn allows_image(&self, image: &mut Image) -> Result<()>;
 }
 ```
 

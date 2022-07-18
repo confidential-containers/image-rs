@@ -7,11 +7,12 @@ use crate::image;
 use crate::policy::ref_match::PolicyReqMatchType;
 use crate::SignScheme;
 use anyhow::*;
+use async_trait::async_trait;
 use serde::*;
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use tokio::fs;
 
 mod sigstore;
 mod verify;
@@ -62,22 +63,26 @@ pub struct SimpleParameters {
     pub signed_identity: Option<PolicyReqMatchType>,
 }
 
+#[async_trait]
 impl SignScheme for SimpleParameters {
-    fn prepare_runtime_dirs(&self) -> Result<()> {
+    async fn prepare_runtime_dirs(&self) -> Result<()> {
         if !Path::new(CONFIG_DIR).exists() {
             fs::create_dir_all(CONFIG_DIR)
+                .await
                 .map_err(|e| anyhow!("Create Simple Signing config dir failed: {:?}", e))?;
         }
 
         if !Path::new(SIG_STORE_CONFIG_DIR).exists() {
-            fs::create_dir_all(SIG_STORE_CONFIG_DIR).map_err(|e| {
-                anyhow!("Create Simple Signing sigstore-config dir failed: {:?}", e)
-            })?;
+            fs::create_dir_all(SIG_STORE_CONFIG_DIR)
+                .await
+                .map_err(|e| {
+                    anyhow!("Create Simple Signing sigstore-config dir failed: {:?}", e)
+                })?;
         }
         Ok(())
     }
 
-    fn resources_check(&self) -> Result<Vec<&str>> {
+    async fn resources_check(&self) -> Result<Vec<&str>> {
         let mut needed_resources = Vec::new();
 
         // config kbs
@@ -97,23 +102,23 @@ impl SignScheme for SimpleParameters {
         Ok(needed_resources)
     }
 
-    fn process_gathered_resources(&self, resources: HashMap<&str, Vec<u8>>) -> Result<()> {
+    async fn process_gathered_resources(&self, resources: HashMap<&str, Vec<u8>>) -> Result<()> {
         // Sigstore Config
         if let Some(sigstore_config) = resources.get(SIGSTORE_CONFIG_KBS) {
             let sigstore_config = String::from_utf8(sigstore_config.to_vec())?;
             let sigstore_config_default_file = format!("{}/default.yaml", SIG_STORE_CONFIG_DIR);
-            fs::write(sigstore_config_default_file, sigstore_config)?;
+            fs::write(sigstore_config_default_file, sigstore_config).await?;
         }
-        
+
         // GPG Keyring
         if let Some(gpg_key_ring) = resources.get(GPG_KEY_RING_KBS) {
-            fs::write(GPG_KEY_RING, gpg_key_ring)?;
+            fs::write(GPG_KEY_RING, gpg_key_ring).await?;
         }
 
         Ok(())
     }
 
-    fn allows_image(&self, image: &mut crate::Image) -> Result<()> {
+    async fn allows_image(&self, image: &mut crate::Image) -> Result<()> {
         // FIXME: only support "GPGKeys" type now.
         //
         // refer to https://github.com/confidential-containers/image-rs/issues/14
@@ -128,12 +133,12 @@ impl SignScheme for SimpleParameters {
             (None, None) => return Err(anyhow!("Neither keyPath or keyData specified.")),
             (Some(_), Some(_)) => return Err(anyhow!("Both keyPath and keyData specified.")),
             (None, Some(key_data)) => base64::decode(key_data)?,
-            (Some(key_path), None) => fs::read(key_path).map_err(|e| {
+            (Some(key_path), None) => fs::read(key_path).await.map_err(|e| {
                 anyhow!("Read SignedBy keyPath failed: {:?}, path: {}", e, key_path)
             })?,
         };
 
-        let sigs = get_signatures(image)?;
+        let sigs = get_signatures(image).await?;
         let mut reject_reasons: Vec<anyhow::Error> = Vec::new();
 
         for sig in sigs.iter() {
@@ -189,7 +194,7 @@ pub fn judge_single_signature(
     Ok(())
 }
 
-pub fn get_signatures(image: &mut image::Image) -> Result<Vec<Vec<u8>>> {
+pub async fn get_signatures(image: &mut image::Image) -> Result<Vec<Vec<u8>>> {
     // Get image digest (manifest digest)
     let image_digest = if !image.manifest_digest.is_empty() {
         image.manifest_digest.clone()
@@ -211,7 +216,7 @@ pub fn get_signatures(image: &mut image::Image) -> Result<Vec<Vec<u8>>> {
     //
     // issue: https://github.com/confidential-containers/image-rs/issues/12
     let sigstore_config =
-        sigstore::SigstoreConfig::new_from_configs(sigstore::SIGSTORE_CONFIG_DIR)?;
+        sigstore::SigstoreConfig::new_from_configs(sigstore::SIGSTORE_CONFIG_DIR).await?;
 
     let sigstore_base_url = sigstore_config
         .base_url(&image.reference)?
@@ -221,7 +226,7 @@ pub fn get_signatures(image: &mut image::Image) -> Result<Vec<Vec<u8>>> {
     let sigstore_uri =
         url::Url::parse(&sigstore).map_err(|e| anyhow!("Failed to parse sigstore_uri: {:?}", e))?;
 
-    let sigs = sigstore::get_sigs_from_specific_sigstore(sigstore_uri)?;
+    let sigs = sigstore::get_sigs_from_specific_sigstore(sigstore_uri).await?;
 
     Ok(sigs)
 }

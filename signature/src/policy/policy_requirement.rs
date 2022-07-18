@@ -29,13 +29,13 @@ pub enum PolicyReqType {
 
 impl PolicyReqType {
     /// Check whether an image is allowed by a given policy requirement.
-    pub fn allows_image(&self, image: &mut Image) -> Result<()> {
+    pub async fn allows_image(&self, image: &mut Image) -> Result<()> {
         match self {
             PolicyReqType::Accept => Ok(()),
             PolicyReqType::Reject => Err(anyhow!(r#"The policy is "reject""#)),
             PolicyReqType::SignedBy(scheme) => {
                 let inner = scheme.inner_ref();
-                inner.allows_image(image)
+                inner.allows_image(image).await
             }
         }
     }

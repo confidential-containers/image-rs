@@ -9,7 +9,7 @@ use oci_distribution::Reference;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fs;
+use tokio::fs;
 
 // The reason for using the `/run` directory here is that in general HW-TEE,
 // the `/run` directory is mounted in `tmpfs`, which is located in the encrypted memory protected by HW-TEE.
@@ -17,7 +17,6 @@ pub const SIGSTORE_CONFIG_DIR: &str = "/run/image-security/simple_signing/sigsto
 
 // Format the sigstore name:
 // `image-repository@digest-algorithm=digest-value`
-#[allow(unused_assignments)]
 pub fn format_sigstore_name(image_ref: &Reference, image_digest: image::digest::Digest) -> String {
     let image_name = image_ref.repository().to_string();
     format!(
@@ -41,14 +40,15 @@ pub struct SigstoreConfig {
 
 impl SigstoreConfig {
     // loads sigstore configuration files(.yaml files) in specific dir.
-    pub fn new_from_configs(dir: &str) -> Result<Self> {
+    pub async fn new_from_configs(dir: &str) -> Result<Self> {
         let mut merged_config = SigstoreConfig::default();
         let yaml_extension = OsStr::new("yaml");
 
-        for entry in fs::read_dir(dir)
-            .map_err(|e| anyhow!("Read Sigstore config Dir failed: {:?}, path: {}", e, dir))?
-        {
-            let entry = entry?;
+        let mut dirs = fs::read_dir(dir)
+            .await
+            .map_err(|e| anyhow!("Read Sigstore config Dir failed: {:?}, path: {}", e, dir))?;
+
+        while let Some(entry) = dirs.next_entry().await? {
             let path = entry.path();
             if path.is_dir() || path.extension() != Some(yaml_extension) {
                 continue;
@@ -56,7 +56,7 @@ impl SigstoreConfig {
             let path_str = path
                 .to_str()
                 .ok_or(anyhow!("Unknown error: path parsed failed."))?;
-            let config_yaml_string = fs::read_to_string(path_str)?;
+            let config_yaml_string = fs::read_to_string(path_str).await?;
             let config = serde_yaml::from_str::<SigstoreConfig>(&config_yaml_string)?;
 
             // The "default-docker" only allowed to be defined in one config file.
@@ -135,7 +135,7 @@ struct SigstoreConfigEntry {
     sigstore: String,
 }
 
-pub fn get_sigs_from_specific_sigstore(sigstore_uri: url::Url) -> Result<Vec<Vec<u8>>> {
+pub async fn get_sigs_from_specific_sigstore(sigstore_uri: url::Url) -> Result<Vec<Vec<u8>>> {
     let mut res: Vec<Vec<u8>> = Vec::new();
 
     // FIXME: Now only support get signatures from local files.
@@ -145,14 +145,14 @@ pub fn get_sigs_from_specific_sigstore(sigstore_uri: url::Url) -> Result<Vec<Vec
     match sigstore_uri.scheme() {
         "file" => {
             let sigstore_dir_path = sigstore_uri.path().to_string();
-            for entry in fs::read_dir(&sigstore_dir_path).map_err(|e| {
+            let mut dirs = fs::read_dir(&sigstore_dir_path).await.map_err(|e| {
                 anyhow!(
                     "Read Sigstore Dir failed: {:?}, path: {}",
                     e,
                     &sigstore_dir_path
                 )
-            })? {
-                let entry = entry?;
+            })?;
+            while let Some(entry) = dirs.next_entry().await? {
                 let path = entry.path();
                 if path.is_dir() {
                     continue;
@@ -160,7 +160,7 @@ pub fn get_sigs_from_specific_sigstore(sigstore_uri: url::Url) -> Result<Vec<Vec
                 let path_str = path
                     .to_str()
                     .ok_or(anyhow!("Unknown error: path parsed failed."))?;
-                let sig = fs::read(path_str).map_err(|e| {
+                let sig = fs::read(path_str).await.map_err(|e| {
                     anyhow!("Read signature file failed: {:?}, path: {}", e, path_str)
                 })?;
                 res.push(sig);

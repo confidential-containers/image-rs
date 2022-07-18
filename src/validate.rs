@@ -70,7 +70,7 @@ pub async fn security_validate(
         fs::write(POLICY_FILE_PATH, policy_json)?;
     }
 
-    let policy = Policy::from_file(POLICY_FILE_PATH)?;
+    let policy = Policy::from_file(POLICY_FILE_PATH).await?;
 
     let reference = Reference::try_from(image_reference)?;
     let mut image = Image::default_with_reference(reference);
@@ -84,15 +84,16 @@ pub async fn security_validate(
     // and get the necessary resources from KBS if needed.
     for scheme in schemes {
         let scheme = scheme.inner_ref();
-        scheme.prepare_runtime_dirs()?;
+        scheme.prepare_runtime_dirs().await?;
 
-        let resource_names = scheme.resources_check()?;
+        let resource_names = scheme.resources_check().await?;
         let resources = get_scheme_resources(resource_names, aa_kbc_params).await?;
-        scheme.process_gathered_resources(resources)?;
+        scheme.process_gathered_resources(resources).await?;
     }
 
     policy
         .is_image_allowed(image)
+        .await
         .map_err(|e| anyhow!("Validate image failed: {:?}", e))
 }
 

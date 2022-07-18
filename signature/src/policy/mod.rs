@@ -6,8 +6,8 @@
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs;
 use std::vec::Vec;
+use tokio::fs;
 
 use crate::{image, mechanism::SignSchemeEnum};
 
@@ -42,8 +42,9 @@ pub type PolicyTransportScopes = HashMap<String, Vec<PolicyReqType>>;
 
 impl Policy {
     // Parse the JSON file of policy (policy.json).
-    pub fn from_file(file_path: &str) -> Result<Self> {
+    pub async fn from_file(file_path: &str) -> Result<Self> {
         let policy_json_string = fs::read_to_string(file_path)
+            .await
             .map_err(|e| anyhow!("Read policy.json file failed: {:?}", e))?;
 
         let policy = serde_json::from_str::<Policy>(&policy_json_string)?;
@@ -53,7 +54,7 @@ impl Policy {
     // Returns Ok(()) if the requirement allows running an image.
     // WARNING: This validates signatures and the manifest, but does not download or validate the
     // layers. Users must validate that the layers match their expected digests.
-    pub fn is_image_allowed(&self, mut image: image::Image) -> Result<()> {
+    pub async fn is_image_allowed(&self, mut image: image::Image) -> Result<()> {
         // Get the policy set that matches the image.
         let reqs = self.requirements_for_image(&image);
         if reqs.is_empty() {
@@ -64,7 +65,7 @@ impl Policy {
 
         // The image must meet the requirements of each policy in the policy set.
         for req in reqs.iter() {
-            req.allows_image(&mut image)?;
+            req.allows_image(&mut image).await?;
         }
 
         Ok(())
