@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use anyhow::*;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 use crate::Image;
 
@@ -38,7 +40,7 @@ pub mod simple;
 
 /// Signing schemes enum.
 /// * `SimpleSigning`: Redhat simple signing.
-#[derive(Deserialize, Debug, PartialEq, Serialize)]
+#[derive(Deserialize, Debug, PartialEq, Serialize, EnumIter)]
 #[serde(tag = "scheme")]
 pub enum SignSchemeEnum {
     #[serde(rename = "simple")]
@@ -48,23 +50,25 @@ pub enum SignSchemeEnum {
 /// The interface of a signing scheme
 #[async_trait]
 pub trait SignScheme {
-    /// Prepare runtime directories for storing signatures, configuretions ,.etc
-    async fn prepare_runtime_dirs(&self) -> Result<()>;
+    /// Do initialization jobs for this scheme. This may include the following
+    /// * preparing runtime directories for storing signatures, configurations, etc.
+    /// * gathering necessary files.
+    async fn init(&self) -> Result<()>;
 
-    /// Check whether the some resources need to be obtained from KBS.
-    /// Any needed resources names are in the `Vec`. Each name is the `name` field of
-    /// a ResourceDescription. ResourceDescription is for GetResourceRequest, which
-    /// is the gRPC between AA and kbs.
+    /// Reture a HashMap including a resource's name => file path in fs.
+    ///
+    /// Here `resource's name` is the `name` field for a ResourceDescription
+    /// in GetResourceRequest.
     /// Please refer to https://github.com/confidential-containers/image-rs/blob/main/docs/ccv1_image_security_design.md#get-resource-service
-    /// for more information about `name` file of ResourceDescription.
-    async fn resources_check(&self) -> Result<Vec<&str>>;
-
-    /// Process all the gathered resources from kbs. All the resources
-    /// gathered from kbs due to the return value of `needed_resources_list_from_kbs()`
-    /// will be recorded into a HashMap, mapping `resource name` ->
-    /// `content of Vec<u8>`. The parameter of this function is the
-    /// HashMap.
-    async fn process_gathered_resources(&self, resources: HashMap<&str, Vec<u8>>) -> Result<()>;
+    /// for more information about the `GetResourceRequest`.
+    ///
+    /// This function will be called by `Agent`, to get the manifest
+    /// of all the resources to be gathered from kbs. The gathering
+    /// operation will happen after `init_scheme()`, to prepare necessary
+    /// resources. The HashMap here uses &str rather than String,
+    /// which encourages developer of new signing schemes to define
+    /// const &str for these information.
+    fn resource_manifest(&self) -> HashMap<&str, &str>;
 
     /// Judge whether an image is allowed by this SignScheme.
     async fn allows_image(&self, image: &mut Image) -> Result<()>;
@@ -78,4 +82,13 @@ impl SignSchemeEnum {
             SignSchemeEnum::SimpleSigning(scheme) => scheme,
         }
     }
+}
+
+/// Initialize all the Signschemes
+pub async fn init_all_signing_schemes() -> Result<()> {
+    for scheme in SignSchemeEnum::iter() {
+        scheme.inner_ref().init().await?;
+    }
+
+    Ok(())
 }

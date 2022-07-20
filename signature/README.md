@@ -42,7 +42,7 @@ For example,
 For example, a new scheme called `new-sign-scheme` is to be added.
 Here are the positions must be modified.
 
-1. `src/mechanism/new-sign-scheme` directory
+### `src/mechanism/new-sign-scheme` directory
 Create `src/mechanism/new-sign-scheme/mod.rs`
 
 Add `pub mod new_sign_scheme` into  `src/mechanism/mod.rs`
@@ -74,71 +74,84 @@ And then the field can be deserialized from `policy.json`.
 
 Besides, Implement the trait `SignScheme` for `NewSignSchemeParameters`.
 ```rust
+/// The interface of a signing scheme
+#[async_trait]
 pub trait SignScheme {
-    /// Prepare runtime directories for storing signatures, configuretions ,.etc
-    async fn prepare_runtime_dirs(&self) -> Result<()>;
+    /// Do initialization jobs for this scheme. This may include the following
+    /// * preparing runtime directories for storing signatures, configurations, etc.
+    /// * gathering necessary files.
+    async fn init(&self) -> Result<()>;
 
-    /// Check whether the some resources need to be obtained from KBS.
-    /// Any needed resources names are in the `Vec`, and these names are
-    /// ResourceDescription in GetResourceRequest of gRPC between AA and kbs.
+    /// Reture a HashMap including a resource's name => file path in fs.
+    /// 
+    /// Here `resource's name` is the `name` field for a ResourceDescription
+    /// in GetResourceRequest.
     /// Please refer to https://github.com/confidential-containers/image-rs/blob/main/docs/ccv1_image_security_design.md#get-resource-service
-    async fn resources_check(&self) -> Result<Vec<&str>>;
-
-    /// Process all the gathered resources from kbs. All the resources
-    /// gathered from kbs due to the return value of `needed_resources_list_from_kbs()`
-    /// will be recorded into a HashMap, mapping `resource name` ->
-    /// `content of Vec<u8>`. The parameter of this function is the
-    /// HashMap.
-    async fn process_gathered_resources(&self, resources: HashMap<&str, Vec<u8>>) -> Result<()>;
+    /// for more information about the `GetResourceRequest`.
+    /// 
+    /// This function will be called by `Agent`, to get the manifest
+    /// of all the resources to be gathered from kbs. The gathering
+    /// operation will happen after `init_scheme()`, to prepare necessary
+    /// resources. The HashMap here uses &str rather than String,
+    /// which encourages developer of new signing schemes to define
+    /// const &str for these information.
+    fn resource_manifest(&self) -> HashMap<&str, &str>;
 
     /// Judge whether an image is allowed by this SignScheme.
     async fn allows_image(&self, image: &mut Image) -> Result<()>;
 }
 ```
 
-For a specific signing scheme in a Policy Requirement,
-these 5 functions are called in the following order.
+The basic architecture for signature verification is the following figure:
 
 ```plaintext
-+------------+                                          +-----------+
-|            |         1.prepare_runtime_dirs()         |           |
-|            +----------------------------------------->|           |
-|            |                                          |           |
-|            |         2.resources_check()              |           |
-|            +----------------------------------------->|           |
-|            |                                          | signature |
-|  image-rs  |                                          |  schemes  |
-|            +                                          |           |
-|            |                                          |           |
-|            |         3.process_gathered_resources()   |           |
-|            +----------------------------------------->|           |
-|            |                                          |           |
-|            |         4.allows_image()                 |           |
-|            +----------------------------------------->|           |
-|            |                                          |           |
-|            |                                          |           |
-|            |                                          |           |
-+------------+                                          +-----------+
+                +-------------+
+                | ImageClient |
+                +-------------+
+                       |
+                       |
+                       v
+              +-----------------+   gRPC Client
+              | Signature-Agent | ---------------> KBS
+              +-----------------+    Access
+                       |
+                       |
+      +----------------+-----------------+
+      |                                  |
+      |                                  |
++-----+-------+                   +------+------+
+|   Signing   |                   |   Signing   |
+|    Scheme   |                   |    Scheme   |
+|   Module 1  |                   |   Module 2  |
++-------------+                   +-------------+
 ```
 
-* Firstly, `prepare_runtime_dirs()` will prepare the directories that this
-signing scheme uses, such as the configurations and signature
-files storage dirs.
-* Secondly, `resources_check()` function will check all the resources
-need to be gathered by Attestation Agent (AA) from kbs, and return 
-a `Vec<&str>` containing all these resources' ResourceDescriptions. 
-A ResourceDescription is a parameter for gRPC GetResourceRequest 
-between AA and kbs. Refer to (get-resource-service)[https://github.com/confidential-containers/image-rs/blob/main/docs/ccv1_image_security_design.md#get-resource-service]
-for more information.
-* After all the resources is gathered by AA, they will be organized
-into a HashMap, with key the resource's Resource Description,
-value the content of the resource. This HashMap will be the 
-input parameter of `process_gathered_resources()`, and this function
-can save the contents into files, or do other things.
-* Finally, `allows_image()` will be called to verify the signature,
-and check whether this image is allowed.
+When a `ImageClient` need to pull an image, it will instanialize
+a `Signature-Agent` to handle Policy Requirements if needed.
+The `Signature-Agent` can communicate with KBS to retrieve needed
+resources. Also, it can call specific signing scheme verification
+module to verify a signature due to the Policy Requirement in
+`policy.json`. So there must be three interfaces for a signing
+scheme to implement:
+1. `init()`: This function is called **once** every
+initialization of a new `Signature-Agent` instance.
+It can do initialization work for this scheme. This may include the following
+* preparing runtime directories for storing signatures, configurations, etc.
+* gathering necessary files.
 
-2. `src/mechanism/mod.rs`.
+2. `resource_manifest()`: This function will tell the `Signature-Agent`
+which resources it need to retrieve from the kbs. The return value should be
+a HashMap. The key of the HashMap is the `name` field for a ResourceDescription
+in GetResourceRequest. The value is the file path that the returned resource will be
+written into after retrieving the resource. Refer to 
+[get-resource-service](https://github.com/confidential-containers/image-rs/blob/main/docs/ccv1_image_security_design.md#get-resource-service)
+for more information about GetResourceRequest. This function will be called
+on every check for a Policy Requirement of this signing scheme.
+
+3. `allows_image()`: This function will do the verification. This
+function will be called on every check for a Policy Requirement of this signing scheme.
+
+### `src/mechanism/mod.rs`
 
 Add a new enum value `NewSignScheme` for `SignScheme` in 
 

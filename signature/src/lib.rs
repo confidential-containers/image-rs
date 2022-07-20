@@ -6,26 +6,36 @@
 //! # Overall
 //! For signature verification in Confidential-Containers.
 //!
-//! # Interfaces
-//! #### Image
-//! An image struct is a well-encapsulated struct used to do
-//! image verification.
+//! # Usage
+//! create a new agent
 //!
-//! #### Policy
-//! A `Policy` is a policy used to verify the image, usually
-//! including signing scheme of the image, or some other rules.
+//! ```no_run
 //!
-//! #### SignScheme
-//! Sign Scheme for the given signature.
+//! // For example kbc
+//! let aa_kbc_params = "null_kbc::null";
+//!
+//! let mut agent = signature::Agent::new(aa_kbc_params).await?;
+//!
+//! // Check an image
+//! agent.allows_image(
+//!     image_url,
+//!     &image_digest,
+//!     )
+//!     .await
+//!     .map_err(|e| anyhow!("Security validate failed: {:?}", e))?;
+//! ```
 
 #[macro_use]
 extern crate strum;
 
+pub mod agent;
 mod image;
 pub mod mechanism;
 mod policy;
 
+pub use agent::Agent;
 pub use image::Image;
+pub use mechanism::init_all_signing_schemes;
 pub use mechanism::SignScheme;
 pub use mechanism::SignSchemeEnum;
 pub use policy::Policy;

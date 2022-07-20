@@ -18,25 +18,27 @@ mod sigstore;
 mod verify;
 
 pub use sigstore::SigstoreConfig;
-pub use sigstore::SIGSTORE_CONFIG_DIR;
 pub use sigstore::{format_sigstore_name, get_sigs_from_specific_sigstore};
 pub use verify::verify_sig_and_extract_payload;
 
-/// Dir of config file
-pub const CONFIG_DIR: &str = "/run/image-security/simple_signing";
-
+/// Dir of Sigstore Config file.
+/// The reason for using the `/run` directory here is that in general HW-TEE,
+/// the `/run` directory is mounted in `tmpfs`, which is located in the encrypted memory protected by HW-TEE.
 pub const SIG_STORE_CONFIG_DIR: &str = "/run/image-security/simple_signing/sigstore_config";
+
+pub const SIG_STORE_CONFIG_DEFAULT_FILE: &str =
+    "/run/image-security/simple_signing/sigstore_config/default.yaml";
 
 /// Path to the gpg pubkey ring of the signature
 pub const GPG_KEY_RING: &str = "/run/image-security/simple_signing/pubkey.gpg";
 
 /// The name of resource to request sigstore config from kbs
-pub const SIGSTORE_CONFIG_KBS: &str = "Sigstore Config";
+pub const SIG_STORE_CONFIG_KBS: &str = "Sigstore Config";
 
 /// The name of gpg key ring to request sigstore config from kbs
 pub const GPG_KEY_RING_KBS: &str = "GPG Keyring";
 
-#[derive(Deserialize, Debug, PartialEq, Serialize)]
+#[derive(Deserialize, Debug, PartialEq, Serialize, Default)]
 pub struct SimpleParameters {
     // KeyType specifies what kind of the public key to verify the signatures.
     #[serde(rename = "keyType")]
@@ -63,59 +65,46 @@ pub struct SimpleParameters {
     pub signed_identity: Option<PolicyReqMatchType>,
 }
 
+/// Prepare directories for configs and sigstore configs.
+/// It will create (if not) the following dirs:
+/// * [`SIG_STORE_CONFIG_DIR`]
+async fn prepare_runtime_dirs() -> Result<()> {
+    if !Path::new(SIG_STORE_CONFIG_DIR).exists() {
+        fs::create_dir_all(SIG_STORE_CONFIG_DIR)
+            .await
+            .map_err(|e| anyhow!("Create Simple Signing sigstore-config dir failed: {:?}", e))?;
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl SignScheme for SimpleParameters {
-    async fn prepare_runtime_dirs(&self) -> Result<()> {
-        if !Path::new(CONFIG_DIR).exists() {
-            fs::create_dir_all(CONFIG_DIR)
-                .await
-                .map_err(|e| anyhow!("Create Simple Signing config dir failed: {:?}", e))?;
-        }
+    /// Init simple scheme signing
+    async fn init(&self) -> Result<()> {
+        prepare_runtime_dirs().await?;
 
-        if !Path::new(SIG_STORE_CONFIG_DIR).exists() {
-            fs::create_dir_all(SIG_STORE_CONFIG_DIR)
-                .await
-                .map_err(|e| {
-                    anyhow!("Create Simple Signing sigstore-config dir failed: {:?}", e)
-                })?;
-        }
         Ok(())
     }
 
-    async fn resources_check(&self) -> Result<Vec<&str>> {
-        let mut needed_resources = Vec::new();
+    /// Check whether [`SIG_STORE_CONFIG_DIR`] and [`GPG_KEY_RING`] exist.
+    fn resource_manifest(&self) -> HashMap<&str, &str> {
+        let mut res = HashMap::<&str, &str>::new();
 
-        // config kbs
-        let need_config = PathBuf::from(SIG_STORE_CONFIG_DIR)
+        // Sigstore Config
+        if PathBuf::from(SIG_STORE_CONFIG_DIR)
             .read_dir()
             .map(|mut i| i.next().is_none())
-            .unwrap_or(false);
-        if need_config {
-            needed_resources.push(SIGSTORE_CONFIG_KBS);
+            .unwrap_or(false)
+        {
+            res.insert(SIG_STORE_CONFIG_KBS, SIG_STORE_CONFIG_DEFAULT_FILE);
         }
 
         // gpg key ring
         if !Path::new(GPG_KEY_RING).exists() {
-            needed_resources.push(GPG_KEY_RING_KBS);
+            res.insert(GPG_KEY_RING_KBS, GPG_KEY_RING);
         }
 
-        Ok(needed_resources)
-    }
-
-    async fn process_gathered_resources(&self, resources: HashMap<&str, Vec<u8>>) -> Result<()> {
-        // Sigstore Config
-        if let Some(sigstore_config) = resources.get(SIGSTORE_CONFIG_KBS) {
-            let sigstore_config = String::from_utf8(sigstore_config.to_vec())?;
-            let sigstore_config_default_file = format!("{}/default.yaml", SIG_STORE_CONFIG_DIR);
-            fs::write(sigstore_config_default_file, sigstore_config).await?;
-        }
-
-        // GPG Keyring
-        if let Some(gpg_key_ring) = resources.get(GPG_KEY_RING_KBS) {
-            fs::write(GPG_KEY_RING, gpg_key_ring).await?;
-        }
-
-        Ok(())
+        res
     }
 
     async fn allows_image(&self, image: &mut crate::Image) -> Result<()> {
@@ -215,8 +204,7 @@ pub async fn get_signatures(image: &mut image::Image) -> Result<Vec<Vec<u8>>> {
     // TODO: Add get signatures from registry X-R-S-S API extension.
     //
     // issue: https://github.com/confidential-containers/image-rs/issues/12
-    let sigstore_config =
-        sigstore::SigstoreConfig::new_from_configs(sigstore::SIGSTORE_CONFIG_DIR).await?;
+    let sigstore_config = sigstore::SigstoreConfig::new_from_configs(SIG_STORE_CONFIG_DIR).await?;
 
     let sigstore_base_url = sigstore_config
         .base_url(&image.reference)?

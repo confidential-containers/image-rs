@@ -30,3 +30,28 @@ needs a signature verification.
 * `signedIdentity` includes a JSON object, refer to [signedIdentity](https://github.com/containers/image/blob/main/docs/containers-policy.json.5.md#signedby) for detail.
 
 **WARNING**: Must specify either `keyData` or `keyPath`, and must not both.
+
+## Work flow
+
+Let's go through the verification logic here.
+
+What we all need to verify a signature are two things:
+`signature`, `public key`.
+
+* `public key` is given by the Policy Requirement, either by data
+or path.
+* Where the `signature` is stored (local path or remote url) is recorded in the `Sigstore Config File`, so we firstly need to create a dir to save `Sigstore Config File`, and then need to get the `Sigstore Config File`.
+* After getting the `signature`, we can do the verification.
+
+Let's see what the code do here:
+
+1. `init()` will check and create the directory
+* Sigstore Dir: `/run/image-security/simple_signing/sigstore_config`
+
+2. Then the following files will be got from kbs
+* Sigstore Configfile: `/run/image-security/simple_signing/sigstore_config/default.yaml`. This file shows where the signatures are stored.
+* Gpg public key ring: `/run/image-security/simple_signing/pubkey.gpg`. This key
+ring is used to verify signatures.
+
+3. Then access the Sigstore, and gather the signatures related to the image, and
+do verifications.

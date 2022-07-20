@@ -14,4 +14,3 @@ pub mod meta_store;
 pub mod pull;
 pub mod snapshots;
 pub mod unpack;
-pub mod validate;

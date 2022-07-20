@@ -11,10 +11,6 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use tokio::fs;
 
-// The reason for using the `/run` directory here is that in general HW-TEE,
-// the `/run` directory is mounted in `tmpfs`, which is located in the encrypted memory protected by HW-TEE.
-pub const SIGSTORE_CONFIG_DIR: &str = "/run/image-security/simple_signing/sigstore_config";
-
 // Format the sigstore name:
 // `image-repository@digest-algorithm=digest-value`
 pub fn format_sigstore_name(image_ref: &Reference, image_digest: image::digest::Digest) -> String {
