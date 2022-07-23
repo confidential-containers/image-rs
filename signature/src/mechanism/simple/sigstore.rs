@@ -184,25 +184,28 @@ mod tests {
 
     use image::digest::Digest;
 
-    #[test]
-    fn test_get_sigs_from_specific_sigstore() {
+    #[tokio::test]
+    async fn test_get_sigs_from_specific_sigstore() {
         let current_dir = env::current_dir().expect("not found path");
         let test_sigstore_dir = format!(
             "file://{}/fixtures/signatures",
             current_dir.to_str().unwrap()
         );
         let test_sigstore_uri = url::Url::parse(test_sigstore_dir.as_str()).unwrap();
-        assert!(get_sigs_from_specific_sigstore(test_sigstore_uri.clone()).is_ok());
+        assert!(get_sigs_from_specific_sigstore(test_sigstore_uri.clone())
+            .await
+            .is_ok());
         assert_eq!(
             2,
             get_sigs_from_specific_sigstore(test_sigstore_uri)
+                .await
                 .unwrap()
                 .len()
         );
     }
 
-    #[test]
-    fn test_get_sigstore_base_url() {
+    #[tokio::test]
+    async fn test_get_sigstore_base_url() {
         #[derive(Debug)]
         struct TestData<'a> {
             reference: Reference,
@@ -223,7 +226,9 @@ mod tests {
         ];
 
         let test_sigstore_config_dir = "./fixtures/sigstore_config";
-        let sigstore_config = SigstoreConfig::new_from_configs(test_sigstore_config_dir).unwrap();
+        let sigstore_config = SigstoreConfig::new_from_configs(test_sigstore_config_dir)
+            .await
+            .unwrap();
 
         for test_case in tests.iter() {
             assert_eq!(
@@ -236,8 +241,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_new_from_configs() {
+    #[tokio::test]
+    async fn test_new_from_configs() {
         #[derive(Debug)]
         struct TestData<'a> {
             sigstore_config_path: &'a str,
@@ -255,7 +260,7 @@ mod tests {
         }];
 
         for case in tests_unexpect.iter() {
-            assert!(SigstoreConfig::new_from_configs(case).is_err());
+            assert!(SigstoreConfig::new_from_configs(case).await.is_err());
         }
 
         for case in tests_expect.iter() {
@@ -263,7 +268,9 @@ mod tests {
             let merged_config = serde_yaml::from_str::<SigstoreConfig>(&merged_string).unwrap();
             assert_eq!(
                 merged_config,
-                SigstoreConfig::new_from_configs(case.sigstore_config_path).unwrap()
+                SigstoreConfig::new_from_configs(case.sigstore_config_path)
+                    .await
+                    .unwrap()
             );
         }
     }

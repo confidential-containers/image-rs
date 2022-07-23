@@ -10,19 +10,25 @@
 //! create a new agent
 //!
 //! ```no_run
+//! use anyhow::{anyhow, Result};
 //!
-//! // For example kbc
-//! let aa_kbc_params = "null_kbc::null";
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     // For example kbc
+//!     let aa_kbc_params = "null_kbc::null";
 //!
-//! let mut agent = signature::Agent::new(aa_kbc_params).await?;
+//!     let mut agent = signature::Agent::new(aa_kbc_params).await?;
 //!
-//! // Check an image
-//! agent.allows_image(
-//!     image_url,
-//!     &image_digest,
-//!     )
-//!     .await
-//!     .map_err(|e| anyhow!("Security validate failed: {:?}", e))?;
+//!     // Check an image
+//!     agent.allows_image(
+//!         "some-url",
+//!         "some-digest",
+//!         )
+//!         .await
+//!         .map_err(|e| anyhow!("Security validate failed: {:?}", e))?;
+//!
+//!     Ok(())
+//! }
 //! ```
 
 #[macro_use]
